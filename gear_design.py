@@ -276,7 +276,7 @@ def main():
     z1, z2 = best["z1"], best["z2"]
     p1, p2 = geo["pinion"]["outer"], geo["gear"]["outer"]
     pitch2 = 2 * math.pi / z2
-    offset2 = math.pi + pitch2 / 2 - (math.pi % pitch2)        # puts a tooth space of the gear facing the pinion
+    offset2 = (math.pi % pitch2) - pitch2 / 2                  # puts a tooth space of the gear facing the pinion tooth
     fig, ax = plt.subplots(figsize=(9, 5))
     frames = 48
     step = 2 * math.pi / z1 / 12

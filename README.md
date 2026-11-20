@@ -1,109 +1,94 @@
-# Parametric Bracket Design: CadQuery + Gmsh + CalculiX
+# Spur Gear Pair: Python Sizing + Parametric OpenSCAD CAD
 
-A wall-mounted aluminium shelf bracket, designed entirely from code. One Python script generates the CAD model from three design parameters, meshes it, solves it with a finite element model, and searches the design space for the lightest bracket that meets a safety factor and a stiffness target. The CAD of the chosen design is exported as STEP and STL.
+A gear reduction designed end to end from code. Python sizes the gear pair for a real motor with tooth bending and surface contact checks, then drives **OpenSCAD from the command line** to generate the involute gears as STL solids and SVG profiles. The exported geometry is measured and verified against gear theory.
 
-![CAD designs](results/cad_designs.png)
+![Gears meshing](results/meshing.gif)
 
-**The chosen design in 3D:** [`results/best_bracket.stl`](results/best_bracket.stl) (GitHub renders STL files interactively, so you can rotate it in the browser).
+**3D models:** [`results/pinion.stl`](results/pinion.stl) and [`results/gear.stl`](results/gear.stl) (GitHub renders STL files interactively).
 
 ## The problem
 
-A shelf bracket is bolted to a wall with four M8 bolts and carries **300 N (about 30 kg)** at the tip hole of a 120 mm arm. It is machined from **aluminium 6061-T6** (E = 69 GPa, yield strength 276 MPa).
+An electric motor of **5 kW at 1450 rpm** drives a machine through a **3:1** spur gear reduction. Find the lightest steel gear pair that survives both classic gear failure modes with a safety factor of 1.5:
 
-| Requirement | Value |
+- **Tooth bending** (the tooth breaking at its root), checked with the Lewis equation
+- **Surface contact** (pitting of the flanks), checked with the Hertz contact stress
+
+| Input | Value |
 |---|---|
-| Safety factor on yield | ≥ 2.0 (peak von Mises stress ≤ 138 MPa) |
-| Tip deflection | ≤ 1.5 mm (L/80) |
-| Objective | minimum mass |
+| Pressure angle | 20° full depth |
+| Allowable bending stress | 200 MPa (through-hardened steel, illustrative) |
+| Allowable contact stress | 900 MPa (through-hardened steel, illustrative) |
+| Search space | module 1.5 to 4 mm, pinion 18 to 30 teeth, face width 8, 10 or 12 × module (195 pairs) |
 
-Design parameters:
+The pinion has at least 18 teeth, so the 20° teeth have no undercut (the theoretical minimum is about 17).
 
-| Parameter | Values |
-|---|---|
-| Thickness t | 5, 6, 8 mm |
-| Inner corner radius r | 3, 12, 25 mm |
-| Width w | 30, 40, 50 mm |
+## Method
 
-A large inner radius works as a full-width gusset with smooth, tangent transitions, so there are no sharp re-entrant corners that would create stress singularities.
+**Sizing (Python):**
+- Torque T = P/ω and tangential force Ft = 2T/d₁ on the pitch circle
+- Dynamic effect from the pitch line speed with the Barth velocity factor Kv = (6.1 + v)/6.1
+- Lewis bending: σF = Kv·Ft / (b·m·Y), with the Lewis form factor Y(z) from Shigley's table, checked on the pinion (fewer teeth, weaker tooth)
+- Hertz contact: σH = Z_E·Z_H·√(Kv·Ft·(u+1) / (b·d₁·u)), with Z_E = 189.8 √MPa (steel on steel) and Z_H = 2.495 (20° spur)
+- Contact ratio εα from the tip and base circles, to check smooth running
 
-## Workflow
+**CAD (OpenSCAD):** [`gear.scad`](gear.scad) builds a true involute profile from the involute function inv(α) = tan α − α, with addendum m, dedendum 1.25 m and zero backlash. All parameters are set from Python on the command line:
 
-1. **CAD (CadQuery):** plate and arm are built as boxes, joined, the inner edge is filleted (found with a `NearestToPointSelector`), and the bolt and load holes are cut. Exported to STEP.
-2. **Mesh (Gmsh):** the STEP is imported, meshed with second-order tetrahedra and refined in the corner region. The Gmsh 10-node tetrahedron is reordered to the CalculiX C3D10 convention (the last two mid-side nodes swap).
-3. **Boundary conditions:** the nodes on the four bolt hole surfaces are fixed; the load is spread over the tip hole surface.
-4. **Solve (CalculiX):** linear static analysis, 15 models in parallel.
-5. **Post-processing:** displacements and nodal stresses are read from the `.frd` file. The peak stress is taken away from the bolts and the load hole (1.5 hole diameters), because point-like constraints and loads create artificial local peaks (Saint-Venant's principle).
+```bash
+openscad -o pinion.stl -D m=3 -D z=19 -D b=30 -D bore=14.2 -D mode=3 gear.scad   # solid
+openscad -o pinion.svg -D m=3 -D z=19 -D mode=2 gear.scad                        # 2D profile
+```
 
 ## Results
 
-### Design space
+**Lightest pair that passes both checks:**
+
+| | Value |
+|---|---|
+| Module | 3 mm |
+| Teeth | pinion 19, gear 57 |
+| Face width | 30 mm |
+| Pitch diameters | 57 / 171 mm, centre distance 114 mm |
+| Pinion torque / tangential force | 32.9 N·m / 1155 N |
+| Pitch line speed | 4.33 m/s (Kv = 1.71) |
+| Bending stress | 69.9 MPa, **SF 2.86** |
+| Contact stress | 588 MPa, **SF 1.53** |
+| Contact ratio | 1.66 |
+| Mass of the pair | 5.6 kg |
+
+**The governing failure mode is surface contact (pitting), not tooth breakage.** Bending has almost twice the required margin, while contact sits right at the limit. This is typical of steel gears: contact stress scales with 1/√(b·d₁), so it is controlled by the pinion diameter, while bending is controlled by the module. That is why the optimum uses a large module (3 mm) with few teeth: it gives the pinion diameter that contact needs without adding width.
+
+A contact ratio of 1.66 means that, on average, 1.66 tooth pairs share the load, so there is always at least one pair in contact and the transmission runs smoothly.
 
 ![Design space](results/design_space.png)
 
-| t | r | w | Mass [g] | Peak stress [MPa] | SF | Tip deflection [mm] | Meets targets |
-|---|---|---|---|---|---|---|---|
-| 5 | 25 | 50 | 159.2 | 113.3 | 2.44 | 2.227 | no (deflection) |
-| 6 | 25 | 40 | 148.4 | 97.7 | 2.83 | 1.634 | no (deflection) |
-| 6 | 25 | 50 | 186.6 | 78.5 | 3.52 | 1.312 | yes |
-| 8 | 3 | 30 | 131.4 | 143.2 | 1.93 | 1.728 | no (both) |
-| **8** | **12** | **30** | **133.8** | **91.0** | **3.03** | **1.375** | **yes, lightest** |
-| 8 | 3 | 40 | 177.2 | 106.8 | 2.58 | 1.300 | yes |
-| 8 | 25 | 50 | 240.7 | 43.9 | 6.28 | 0.561 | yes |
+![Bending vs contact](results/bending_vs_contact.png)
 
-The full table of all 27 designs is in [`results/report.txt`](results/report.txt).
+![3D gear pair](results/gear_pair_3d.png)
 
-**Optimum: t = 8 mm, r = 12 mm, w = 30 mm, 133.8 g**, peak stress 91 MPa (SF 3.03), tip deflection 1.375 mm.
+## Verification of the CAD geometry
 
-![Stress in the optimum design](results/stress_optimum.png)
+The exported files are measured and compared with gear theory:
 
-### Engineering insights
+| Part | Teeth counted | Tip radius (measured / theory) | Root radius (measured / theory) | Tooth thickness on the pitch circle (measured / πm/2) | Volume STL vs SVG area × width |
+|---|---|---|---|---|---|
+| Pinion | 19 | 31.500 / 31.500 | 24.750 / 24.750 | 4.7114 / 4.7124 | +0.011% |
+| Gear | 57 | 88.500 / 88.500 | 81.750 / 81.750 | 4.7111 / 4.7124 | +0.011% |
 
-- **The design is stiffness-driven, not strength-driven.** Many thinner designs are strong enough (SF > 2) but bend too much. The optimum has an SF of 3.03, well above the target, because the deflection limit is the active constraint. Deflection scales with 1/t³ through the bending stiffness, so thickness is far more effective than width, which only scales it with 1/w.
-- **The corner radius is cheap stiffness and strength.** With the same 8 mm thickness, going from r = 3 mm to r = 12 mm cut the peak stress from 143 to 91 MPa and the deflection from 1.73 to 1.38 mm, for only 2.4 g more aluminium. The best design with the smallest radius needs w = 40 mm and weighs 177.2 g, so the larger radius saves **25% of the mass**.
-- **Where it peaks:** the maximum stress sits on the underside of the arm, where the fillet blends into the flat surface (x = 18 mm, close to t + r = 20 mm). The fillet spreads the load, so the peak moves from the corner to the end of the fillet, where the arm section becomes thin again and the bending moment is still high.
-
-### Verification against beam theory
-
-![Verification and Kt](results/verification_kt.png)
-
-Along the top surface of the arm (t = 6 mm, w = 40 mm), the FEA bending stress follows σ = M·c / I with a **mean difference of 1.1%**, away from the corner and the load hole.
-
-### Stress concentration at the corner
-
-| Fillet radius [mm] | 0.5 | 1 | 2 | 3 | 5 | 8 |
-|---|---|---|---|---|---|---|
-| Kt = σ_peak / σ_nominal | 2.99 | 2.25 | 1.59 | 1.33 | 1.20 | 1.11 |
-
-A 0.5 mm radius nearly triples the stress at the corner; an 8 mm radius brings it within 11% of the nominal beam stress. This is the classic reason why sharp internal corners are avoided in machined parts, especially under fatigue loading.
-
-### Mesh convergence (optimum design)
-
-![Mesh convergence](results/mesh_convergence.png)
-
-| Element size [mm] | Elements | Peak stress [MPa] | Tip deflection [mm] |
-|---|---|---|---|
-| 12.8 | 2,324 | 89.0 | 1.3684 |
-| 8.8 | 3,900 | 90.1 | 1.3727 |
-| 6.4 | 7,382 | 92.0 | 1.3752 |
-| 4.8 | 14,961 | 93.3 | 1.3763 |
-
-The deflection is converged to 0.1%. The peak stress changes by 1.4% in the last refinement. The design sweep uses the 7.2 mm mesh (about 6,000 elements per design to keep 27 designs fast), which underestimates the peak stress by about 2.5% compared to the finest mesh. Even with the finest-mesh value of 93.3 MPa, the optimum keeps a safety factor of 2.96, so the conclusion does not change.
+- The tooth thickness is found by intersecting the exported profile with the pitch circle; the 0.02% difference comes from the polygon approximation of the involute (14 points per flank).
+- The STL volume is computed with the divergence theorem (sum of signed tetrahedra), which also confirms that the solid is closed and correctly oriented.
 
 ## How to run
 
-Linux or WSL, with CalculiX (`sudo apt install calculix-ccx`) and a Python virtual environment:
-
 ```bash
-python3 -m venv ~/venv-cad
-source ~/venv-cad/bin/activate
-pip install cadquery matplotlib gmsh
-python bracket_design.py
+sudo apt install openscad
+pip install numpy matplotlib
+python gear_design.py
 ```
 
-The whole study (27 designs, verification, fillet study and mesh convergence, 38 FE models) runs in a few minutes, with the CalculiX jobs in parallel.
+It takes about 15 seconds. Figures, STL files and the report go to `results/`.
 
 ## Limitations
 
-- Linear elastic, small displacements; bolts modelled as fixed hole surfaces (no bolt preload or wall contact).
-- Static strength only. A real bracket under repeated loads would also need a fatigue check, where the corner Kt matters even more.
-- Possible extensions: a continuous optimizer instead of a grid sweep, lightening pockets, and fatigue life with an S-N curve.
+- Lewis and Hertz with a velocity factor are classic first-pass methods. A final design would follow AGMA 2001 or ISO 6336, with load distribution, overload, size, reliability and life factors and real material data.
+- Zero backlash and no profile shift or tip relief.
+- Possible extensions: helical gears, profile shift to balance bending strength, and a CalculiX contact analysis of one tooth pair.
